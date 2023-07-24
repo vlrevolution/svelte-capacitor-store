@@ -1,173 +1,79 @@
-import { writable, type Writable } from "svelte/store";
-import { Preferences } from '@capacitor/preferences';
+import { writable, type Writable } from 'svelte/store';
 import { Capacitor } from '@capacitor/core';
+import { Preferences } from '@capacitor/preferences';
+
+interface StoreOptions<T> {
+	storeName: string;
+	initialValue: T;
+	initFunction?: () => void;
+}
+
+// Define a new interface that extends Writable and includes reset
+interface ResettableWritable<T> extends Writable<T> {
+	reset: () => void;
+}
 
 const isDeviceNative = Capacitor.isNativePlatform();
 
-export function arrayStore<T>({ storeName, initialValue, initFunction }: { storeName: string, initialValue: T, initFunction?: () => void }) {
-
-  const { subscribe, update, set } = writable(initialValue, () => {
-    if (typeof window === 'undefined') return
-    setTimeout(async () => {
-      let storedValue: T | null
-      if (isDeviceNative) {
-        storedValue = await getCapacitorStore(storeName) as T | null
-      } else {
-        storedValue = JSON.parse(localStorage.getItem(storeName) || 'null') as T | null
-      }
-
-      if (Array.isArray(storedValue)) set(storedValue);
-      if (initFunction) initFunction()
-    }, 0);
-  }) as Writable<T>;
-
-  subscribe(async (value: T) => {
-    if (typeof window === 'undefined' || !value || !Array.isArray(value) || !value.length || !value?.[0]) return
-    if (isDeviceNative) await setCapacitorStore({ key: storeName, value: JSON.stringify(value) })
-    else localStorage.setItem(storeName, JSON.stringify(value));
-  });
-
-  return {
-    subscribe,
-    update,
-    set,
-
-    reset: async (): Promise<void> => {
-      if (typeof window === 'undefined') return
-      set(initialValue)
-      if (isDeviceNative) await setCapacitorStore({ key: storeName, value: JSON.stringify(initialValue) })
-      else localStorage.setItem(storeName, JSON.stringify(initialValue));
-    },
-    getValue: async (): Promise<T | null> => {
-      let storedValue: T | null
-      if (isDeviceNative) {
-        storedValue = await getCapacitorStore(storeName) as T | null
-      } else {
-        storedValue = JSON.parse(localStorage.getItem(storeName) || 'null') as T | null
-      }
-
-      return storedValue;
-    }
-
-  }
+async function getStoredValue(key: string): Promise<any | null> {
+	if (isDeviceNative) {
+		const { value } = await Preferences.get({ key });
+		return value ? JSON.parse(value) : null;
+	} else {
+		return JSON.parse(localStorage.getItem(key) || 'null');
+	}
 }
 
-export function objectStore<T>({ storeName, initialValue, initFunction }: { storeName: string, initialValue: T, initFunction?: () => void }) {
-
-  const { subscribe, update, set } = writable(initialValue, () => {
-    if (typeof window === 'undefined') return
-    setTimeout(async () => {
-      let storedValue: T | null
-      if (isDeviceNative) {
-        storedValue = await getCapacitorStore(storeName) as T | null
-      } else {
-        storedValue = JSON.parse(localStorage.getItem(storeName) || 'null') as T | null
-      }
-
-      if (storedValue) set(storedValue)
-      if (initFunction) initFunction()
-    }, 0);
-  }) as Writable<T>;
-
-  subscribe(async (value: T) => {
-    if (typeof window === 'undefined' || !value) return
-    if (isDeviceNative) await setCapacitorStore({ key: storeName, value: JSON.stringify(value) })
-    else localStorage.setItem(storeName, JSON.stringify(value));
-  });
-
-  return {
-    subscribe,
-    update,
-    set,
-
-    reset: async (): Promise<void> => {
-      if (typeof window === 'undefined') return
-      set(initialValue)
-      if (isDeviceNative) await setCapacitorStore({ key: storeName, value: JSON.stringify(initialValue) })
-      else localStorage.setItem(storeName, JSON.stringify(initialValue));
-    },
-    getValue: async (): Promise<T | null> => {
-      let storedValue: T | null
-      if (isDeviceNative) {
-        storedValue = await getCapacitorStore(storeName) as T | null
-      } else {
-        storedValue = JSON.parse(localStorage.getItem(storeName) || 'null') as T | null
-      }
-
-      return storedValue;
-    }
-
-  }
+async function setStoredValue(key: string, value: any) {
+	if (isDeviceNative) {
+		await Preferences.set({ key, value: JSON.stringify(value) });
+	} else {
+		localStorage.setItem(key, JSON.stringify(value));
+	}
 }
 
-export function variableStore<T>({ storeName, initialValue, initFunction }: { storeName: string, initialValue: T, initFunction?: () => void }) {
+export function createPersistedStore<T>({
+	storeName,
+	initialValue,
+	initFunction
+}: StoreOptions<T>): { store: ResettableWritable<T | null>; loading: Writable<boolean> } {
+	const { subscribe, set, update } = writable<T | null>(null);
+	const loading = writable(true);
 
-  const { subscribe, update, set } = writable(initialValue, () => {
-    if (typeof window === 'undefined') return
-    setTimeout(async () => {
-      let storedValue: T | null
-      if (isDeviceNative) {
-        storedValue = await getCapacitorStore(storeName) as T | null
-      } else {
-        storedValue = JSON.parse(localStorage.getItem(storeName) || '[]') as T | null
-      }
+	// This is called every time the store is updated
+	subscribe(async (value) => {
+		if (value !== null) {
+			await setStoredValue(storeName, value);
+		}
+	});
 
-      if (storedValue !== null && storedValue !== undefined && typeof storedValue === typeof initialValue) set(storedValue);
-      if (initFunction) initFunction()
+	// Load the persisted value in the background, after the store is created
+	// This will automatically update all subscribers with the loaded value
+	getStoredValue(storeName).then((storedValue) => {
+		if (storedValue !== null) {
+			set(storedValue);
+		} else {
+			set(initialValue);
+		}
 
-    }, 0);
-  }) as Writable<T>;
+		if (initFunction) {
+			initFunction();
+		}
 
-  subscribe(async (value: T) => {
-    if (typeof window === 'undefined' || typeof value !== typeof initialValue) return
-    if (isDeviceNative) await setCapacitorStore({ key: storeName, value: JSON.stringify(value) })
-    else localStorage.setItem(storeName, JSON.stringify(value));
-  });
+		loading.set(false);
+	});
 
-  return {
-    subscribe,
-    update,
-    set,
-
-    reset: async (): Promise<void> => {
-      if (typeof window === 'undefined') return
-      set(initialValue)
-      if (isDeviceNative) await setCapacitorStore({ key: storeName, value: JSON.stringify(initialValue) })
-      else localStorage.setItem(storeName, JSON.stringify(initialValue));
-    },
-
-    getValue: async (): Promise<T | null> => {
-      let storedValue: T | null
-      if (isDeviceNative) {
-        storedValue = await getCapacitorStore(storeName) as T | null
-      } else {
-        storedValue = JSON.parse(localStorage.getItem(storeName) || 'null') as T | null
-      }
-
-      return storedValue;
-    }
-
-  }
+	return {
+		store: {
+			subscribe,
+			set,
+			update,
+			reset: () => {
+				set(initialValue);
+				setStoredValue(storeName, initialValue);
+			}
+		},
+		loading
+	};
 }
 
-async function getCapacitorStore(key: string) {
-  try {
-    if (typeof window === 'undefined' || !isDeviceNative) return null
-
-    const result = await Preferences.get({ key });
-    const value = result.value;
-    return value ? JSON.parse(value) : null;
-  } catch (error) {
-    // console.error(`Error at getStore function, key: ${key}. error: ${error}`);
-    return null
-  }
-}
-
-async function setCapacitorStore({ key, value }: { key: string, value: any }) {
-  try {
-    if (typeof window === 'undefined' || !isDeviceNative) return
-    await Preferences.set({ key, value: JSON.stringify(value) });
-  } catch (error) {
-    // console.error(`Error at setStore function, key: ${key}. error: ${error}`);
-  }
-}
